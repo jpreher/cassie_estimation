@@ -42,5 +42,10 @@ add_library(${PROJECT_NAME}
     src/contact_classifier.cpp
     src/heelspring_solver.cpp
     src/kinematics_hip_velocity_estimator.cpp
+    src/contact_ekf.cpp
 )
 target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES})
+
+# Main state machine node for handling locomotion controllers
+add_executable(test_node src/test_ekf.cpp)
+target_link_libraries(test_node ${catkin_LIBRARIES} ${PROJECT_NAME})
