@@ -126,7 +126,7 @@ int main(int argc, char *argv[])
                R(2,0), R(2,1), R(2,2), // 3
                pos,      // 3
                vel,      // 3
-               v.col(i), // 3
+               ekf.getRawVelocity(), //v.col(i), // 3
                ba,       // 3
                bg,       // 3
                plf,      // 3

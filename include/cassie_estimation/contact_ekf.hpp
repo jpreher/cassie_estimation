@@ -27,7 +27,7 @@ public:
     void reset();
     void update(double dt, VectorXd &w, VectorXd &a, VectorXd &encoders, VectorXd &dencoders, VectorXd &contact);
     void getValues(Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bg, Vector3d &plf, Vector3d &prf);
-
+    Vector3d getRawVelocity();
 private:
     /**
     * @brief Computations that can be reproduced given a Config and Memory object

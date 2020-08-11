@@ -185,6 +185,12 @@ void contact_ekf::getValues(Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba,
         v << this->lpVX.getValue(), this->lpVY.getValue(), this->lpVZ.getValue();
 }
 
+Vector3d contact_ekf::getRawVelocity() {
+    Vector3d v;
+    v << this->memory.X.col(4);
+    return v;
+}
+
 void contact_ekf::update(double dt, VectorXd &w, VectorXd &a, VectorXd &encoders, VectorXd &dencoders, VectorXd &contact) {
     // Initialize bias
     // (does nothing if bias is already initialized)
