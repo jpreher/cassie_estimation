@@ -196,6 +196,12 @@ void contact_ekf::update(double dt, VectorXd &w, VectorXd &a, VectorXd &encoders
     // (does nothing if bias is already initialized)
     this->initializeBias(w, a);
 
+    // Check dt and clamp for safety
+    if (dt < 0.0001)
+        dt = 0.0001;
+    if (dt > 0.01)
+        dt = 0.01;
+
     // Make contact binary rather than smooth
     VectorXd con(2);
     if (contact(0) >= 0.5)
