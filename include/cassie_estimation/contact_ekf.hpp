@@ -26,7 +26,7 @@ public:
     void initialize();
     void reset();
     void update(double dt, VectorXd &w, VectorXd &a, VectorXd &encoders, VectorXd &dencoders, VectorXd &contact);
-    void getValues(Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bg, Vector3d &plf, Vector3d &prf);
+    void getValues(Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bg, Vector3d &plf, Vector3d &prf, Vector2d &footYaws);
     Vector3d getRawVelocity();
 private:
     /**
@@ -91,6 +91,7 @@ private:
         double contact_yaw_noise_std;
         double dcontact_noise_std;
         double encoder_noise_std;
+        double contact_yaw_std;
 
         double position_std;
         double velocity_std;
@@ -103,6 +104,7 @@ private:
         double prior_gyro_bias_std;
         double prior_accel_bias_std;
         double prior_forward_kinematics_std;
+        double prior_contact_yaw_std;
 
         bool apply_post_filter;
         double post_filter_dt_cutoff_x;
@@ -139,14 +141,14 @@ private:
     void predict_state(double dt);
     void update_forward_kinematics(VectorXd &w, VectorXd &encoders, VectorXd &dencoders, VectorXd &contact);
     
-    void packState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bw, Vector3d &plf, Vector3d &prf);
-    void unpackState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bw, Vector3d &plf, Vector3d &prf);
+    void packState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bw, Vector3d &plf, Vector3d &prf, Vector2d &footYaws);
+    void unpackState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bw, Vector3d &plf, Vector3d &prf, Vector2d &footYaws);
 
     // Robot model
     bool do_update_robot;
     cassie_model::Cassie *robot;
     void relative_foot_positions(VectorXd &enc, Vector3d &plf, Vector3d &prf, Matrix3d &Rlf, Matrix3d &Rrf);
-    void relative_foot_jacobians(VectorXd &enc, MatrixXd &Jlf, MatrixXd &Jrf);
+    void relative_foot_jacobians(VectorXd &enc, MatrixXd &Jlf, MatrixXd &Jrf, MatrixXd &JrotLF_enc, MatrixXd &JrotRF_enc);
 
     // Helper functions
     int factorial(int n);

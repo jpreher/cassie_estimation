@@ -26,14 +26,14 @@
 #include <unsupported/Eigen/EulerAngles>
 
 void contact_ekf::Cache::init() {
-    this->Fc.resize(21,21);
-    this->Fk.resize(21,21);
-    this->Gc.resize(21,18);
-    this->Hk.resize(6,21);
-    this->Rk.resize(6,6);
-    this->Sk.resize(6,6);
-    this->K.resize(21,6);
-    this->Qscaled.resize(21,21);
+    this->Fc.resize(23,23);
+    this->Fk.resize(23,23);
+    this->Gc.resize(23,20);
+    this->Hk.resize(8,23);
+    this->Rk.resize(8,8);
+    this->Sk.resize(8,8);
+    this->K.resize(23,8);
+    this->Qscaled.resize(23,23);
     
     this->reset();
 }
@@ -50,8 +50,8 @@ void contact_ekf::Cache::reset() {
 }
 
 void contact_ekf::Memory::init() {
-    this->X.resize(3,9);
-    this->P.resize(21,21);
+    this->X.resize(3,10);
+    this->P.resize(23,23);
     this->encoders_prev.resize(14);
     this->dencoders_prev.resize(14);
 
@@ -79,8 +79,8 @@ void contact_ekf::Memory::reset() {
 }
 
 void contact_ekf::Config::init() {
-    this->P_prior.resize(21,21);
-    this->Qcontinuous.resize(24,24);
+    this->P_prior.resize(23,23);
+    this->Qcontinuous.resize(20,20);
 }
 
 void contact_ekf::Config::reconfigure() {
@@ -96,9 +96,10 @@ void contact_ekf::Config::reconfigure() {
     this->paramChecker.checkAndUpdate("dcontact_noise_std",    this->dcontact_noise_std);
     this->paramChecker.checkAndUpdate("encoder_noise_std",     this->encoder_noise_std);
 
-    this->paramChecker.checkAndUpdate("position_std", this->position_std);
-    this->paramChecker.checkAndUpdate("velocity_std", this->velocity_std);
-    this->paramChecker.checkAndUpdate("contact_std",  this->contact_std);
+    this->paramChecker.checkAndUpdate("position_std",    this->position_std);
+    this->paramChecker.checkAndUpdate("velocity_std",    this->velocity_std);
+    this->paramChecker.checkAndUpdate("contact_std",     this->contact_std);
+    this->paramChecker.checkAndUpdate("contact_yaw_std", this->contact_yaw_std);
 
     this->paramChecker.checkAndUpdate("prior_base_rotation_std",      this->prior_base_rotation_std);
     this->paramChecker.checkAndUpdate("prior_base_position_std",      this->prior_base_position_std);
@@ -107,21 +108,23 @@ void contact_ekf::Config::reconfigure() {
     this->paramChecker.checkAndUpdate("prior_gyro_bias_std",          this->prior_gyro_bias_std);
     this->paramChecker.checkAndUpdate("prior_accel_bias_std",         this->prior_accel_bias_std);
     this->paramChecker.checkAndUpdate("prior_forward_kinematics_std", this->prior_forward_kinematics_std);
+    this->paramChecker.checkAndUpdate("prior_contact_yaw_std",        this->prior_contact_yaw_std);
 
-    this->paramChecker.checkAndUpdate("apply_post_filter", this->apply_post_filter);
+    this->paramChecker.checkAndUpdate("apply_post_filter",       this->apply_post_filter);
     this->paramChecker.checkAndUpdate("post_filter_dt_cutoff_x", this->post_filter_dt_cutoff_x);
     this->paramChecker.checkAndUpdate("post_filter_dt_cutoff_y", this->post_filter_dt_cutoff_y);
     this->paramChecker.checkAndUpdate("post_filter_dt_cutoff_z", this->post_filter_dt_cutoff_z);
 
     // Assign covariance values
     // Create the continuous process covariance matrix
-    this->Qcontinuous.resize(18,18); this->Qcontinuous.setZero();
+    this->Qcontinuous.resize(20,20); this->Qcontinuous.setZero();
     this->Qcontinuous.diagonal() << pow(this->accel_noise_std,2)      * VectorXd::Ones(3),
                                     pow(this->gyro_noise_std,2)       * VectorXd::Ones(3),
                                     pow(this->accel_bias_noise_std,2) * VectorXd::Ones(3),
                                     pow(this->gyro_bias_noise_std,2)  * VectorXd::Ones(3),
                                     pow(this->contact_std,2)          * VectorXd::Ones(3),
-                                    pow(this->contact_std,2)          * VectorXd::Ones(3);
+                                    pow(this->contact_std,2)          * VectorXd::Ones(3),
+                                    pow(this->contact_yaw_std,2)      * VectorXd::Ones(2);
 
     // Build prior
     this->P_prior.setZero();
@@ -131,9 +134,9 @@ void contact_ekf::Config::reconfigure() {
             pow(this->prior_base_velocity_std,2)    * VectorXd::Ones(3), // velocity
             pow(this->prior_gyro_bias_std,2)        * VectorXd::Ones(3), // bias
             pow(this->prior_accel_bias_std,2)       * VectorXd::Ones(3),
-            pow(this->prior_contact_position_std,2) * VectorXd::Ones(3), // rf
-            pow(this->prior_contact_position_std,2) * VectorXd::Ones(3);;
-
+            pow(this->prior_contact_position_std,2) * VectorXd::Ones(3), // lf_pos
+            pow(this->prior_contact_position_std,2) * VectorXd::Ones(3), // rf_pos
+            pow(this->prior_contact_yaw_std,2)      * VectorXd::Ones(2); // lf/rf yaw
 }
 
 contact_ekf::contact_ekf(ros::NodeHandle &nh, cassie_model::Cassie &robot, bool do_update_robot) : nh(&nh) {
@@ -178,8 +181,8 @@ void contact_ekf::reset() {
     this->lpVZ.reset(0.);
 }
 
-void contact_ekf::getValues(Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bg, Vector3d &plf, Vector3d &prf) {
-    unpackState(this->memory.X, R, p, v, ba, bg, plf, prf);
+void contact_ekf::getValues(Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bg, Vector3d &plf, Vector3d &prf, Vector2d &footYaws) {
+    unpackState(this->memory.X, R, p, v, ba, bg, plf, prf, footYaws);
 
     if (this->config.apply_post_filter)
         v << this->lpVX.getValue(), this->lpVY.getValue(), this->lpVZ.getValue();
@@ -202,21 +205,10 @@ void contact_ekf::update(double dt, VectorXd &w, VectorXd &a, VectorXd &encoders
     if (dt > 0.01)
         dt = 0.01;
 
-    // Make contact binary rather than smooth
-    VectorXd con(2);
-    if (contact(0) >= 0.5)
-        con(0) = 1.0;
-    else
-        con(0) = 0.0;
-    if (contact(1) >= 0.5)
-        con(1) = 1.0;
-    else
-        con(1) = 0.0;
-
     // Initialize filter
     // (does nothing if filter is already initialized)
-    if ( (con(0) >= 0.99) || (con(1) >= 0.99) ) {
-        this->initializeFilter(encoders, con);
+    if ( (contact(0) >= 0.99) || (contact(1) >= 0.99) ) {
+        this->initializeFilter(encoders, contact);
     }
 
     // Update
@@ -224,9 +216,9 @@ void contact_ekf::update(double dt, VectorXd &w, VectorXd &a, VectorXd &encoders
         // Predict state using IMU and contact measurements
         this->predict_state(dt);
 
-        if ( (con(0) >= 0.99) || (con(1) >= 0.99) ) {
+        if ( (contact(0) >= 0.25) || (contact(1) >= 0.25) ) {
             // Update state using forward kinematic measurements
-            this->update_forward_kinematics(w, encoders, dencoders, con);
+            this->update_forward_kinematics(w, encoders, dencoders, contact);
             this->memory.t_last = ros::Time::now().toSec();
         }
     }
@@ -246,7 +238,7 @@ void contact_ekf::update(double dt, VectorXd &w, VectorXd &a, VectorXd &encoders
     this->memory.a_prev << a;
     this->memory.encoders_prev << encoders;
     this->memory.dencoders_prev << dencoders;
-    this->memory.contact_prev << con;
+    this->memory.contact_prev << contact;
 
     // Update robot
     if (this->config.do_update_robot) {
@@ -260,7 +252,7 @@ void contact_ekf::initializeBias(VectorXd &w, VectorXd &a) {
     // TODO static bias initialization...
     // for now do no bias initialization
     this->memory.ba0.setZero();
-    this->memory.ba0 << 0.15, 0.0, -0.20; // Hard coded
+    this->memory.ba0 << 0.0, 0.0, -0.20; // Hard coded
     this->memory.bg0.setZero();
     this->memory.bias_initialized = true;
 }
@@ -280,6 +272,7 @@ void contact_ekf::initializeFilter(VectorXd &encoders, VectorXd &contact) {
         R << Ry * Rx;
       
         Matrix3d Rlf, Rrf;
+        Vector2d footYaws = Vector2d::Zero();
         Vector3d pLF, pRF, p_init, v_init;
         p_init.setZero();
         v_init.setZero();
@@ -293,8 +286,8 @@ void contact_ekf::initializeFilter(VectorXd &encoders, VectorXd &contact) {
         pLF(2) += p_init(2);
         pRF(2) += p_init(2);
 
-        MatrixXd X_init = MatrixXd::Identity(3,9);
-        packState(X_init, R, p_init, v_init, this->memory.ba0, this->memory.bg0, pLF, pRF);
+        MatrixXd X_init = MatrixXd::Identity(3,10);
+        packState(X_init, R, p_init, v_init, this->memory.ba0, this->memory.bg0, pLF, pRF, footYaws);
 
         this->memory.timer.restart();
         this->memory.t_last = ros::Time::now().toSec() - 0.0005; // Assume 2kHz (better not to assume...)
@@ -319,8 +312,9 @@ void contact_ekf::predict_state(double dt) {
 
     // Separate state vector into components
     Matrix3d R;
+    Vector2d footYaws;
     Vector3d p, v, ba, bg, pRF, pLF;
-    unpackState(this->memory.X, R, p, v, ba, bg, pLF, pRF);
+    unpackState(this->memory.X, R, p, v, ba, bg, pLF, pRF, footYaws);
     Matrix3d Rt = R.transpose();
 
     // Bias corrected IMU information
@@ -339,28 +333,50 @@ void contact_ekf::predict_state(double dt) {
 
     // Foot positions -- keep static during full contact, kinematics during swing
     //Foot Position Dynamics
-    Matrix3d RLF_enc, RRf_enc;
+    Matrix3d RLF_enc, RRF_enc;
     Vector3d pLF_enc(3,1), pRF_enc(3,1);
-    relative_foot_positions(this->memory.encoders_prev, pLF_enc, pRF_enc, RLF_enc, RRf_enc);
+    relative_foot_positions(this->memory.encoders_prev, pLF_enc, pRF_enc, RLF_enc, RRF_enc);
     Vector3d pRF_off = p_pred + R_pred * pRF_enc;
     Vector3d pLF_off = p_pred + R_pred * pLF_enc;
 
+    // Foot Rotations
+    Matrix3d RLF_pred, RRF_pred;
+    RLF_pred = R_pred * RLF_enc;
+    RRF_pred = R_pred * RRF_enc;
+
+    Vector2d footYaws_off;
+    Eigen::EulerAnglesXYZd euler;
+    eulerXYZ(RLF_pred, euler);
+    footYaws_off(0) = euler.gamma();
+    eulerXYZ(RRF_pred, euler);
+    footYaws_off(1) = euler.gamma();
+
     // Get blended prediction of feet
-    VectorXd Qcont(18,18);
+    MatrixXd Qcont(20,20);
     Qcont << this->config.Qcontinuous;
+    Vector2d footYaws_pred;
     Vector3d pRF_pred, pLF_pred;
-    if (this->memory.contact_prev(1) >= 0.5) {
+    if (this->memory.contact_prev(1) >= 0.25) {
         pRF_pred = pRF;
+        footYaws_pred(1) = footYaws(1);
     } else {
         pRF_pred = pRF_off;
         Qcont.block(15,15,3,3) << 10000.0 * Matrix3d::Identity();
+
+        footYaws_pred(1) = footYaws_off(1);
+        Qcont(19,19) = 10000.0;
+
     }
-    Qcont.block(15,15,3,3) = RRf_enc * Qcont.block(15,15,3,3) * RRf_enc.transpose();
-    if (this->memory.contact_prev(0) >= 0.5) {
+    Qcont.block(15,15,3,3) = RRF_enc * Qcont.block(15,15,3,3) * RRF_enc.transpose();
+    if (this->memory.contact_prev(0) >= 0.25) {
         pLF_pred = pLF;
+        footYaws_pred(0) = footYaws(0);
     } else {
         pLF_pred = pLF_off;
         Qcont.block(12,12,3,3) << 10000.0 * Matrix3d::Identity();
+
+        footYaws_pred(0) = footYaws_off(0);
+        Qcont(18,18) = 10000.0;
     }
     Qcont.block(12,12,3,3) = RLF_enc * Qcont.block(12,12,3,3) * RLF_enc.transpose();
 
@@ -390,28 +406,33 @@ void contact_ekf::predict_state(double dt) {
 
     MatrixXd eye  = MatrixXd::Identity(3,3);
     MatrixXd zero = MatrixXd::Zero(3,3);
+    MatrixXd zero_col = MatrixXd::Zero(3,1);
 
     this->cache.Fk.setIdentity();
-    //                R                          p     v       ba               bg                  plf   prf
-    this->cache.Fk << G0.transpose(),            zero, zero,   zero,            -G1.transpose()*dt, zero, zero,
-                      -R*skew(G2*a_k)*pow(dt,2), eye,  eye*dt, -R*G2*pow(dt,2), R*Psi2*pow(dt,3),   zero, zero,
-                      -R*skew(G1*a_k)*dt,        zero, eye,    -R*G1*dt,        R*Psi1*pow(dt,2),   zero, zero,
-                      zero,                      zero, zero,   eye,             zero,               zero, zero,
-                      zero,                      zero, zero,   zero,            eye,                zero, zero,
-                      zero,                      zero, zero,   zero,            zero,               eye,  zero,
-                      zero,                      zero, zero,   zero,            zero,               zero, eye;
+    //                R                          p     v       ba               bg                  plf   prf    ylf       yrf
+    this->cache.Fk << G0.transpose(),            zero, zero,   zero,            -G1.transpose()*dt, zero, zero,  zero_col, zero_col,
+                      -R*skew(G2*a_k)*pow(dt,2), eye,  eye*dt, -R*G2*pow(dt,2), R*Psi2*pow(dt,3),   zero, zero,  zero_col, zero_col,
+                      -R*skew(G1*a_k)*dt,        zero, eye,    -R*G1*dt,        R*Psi1*pow(dt,2),   zero, zero,  zero_col, zero_col,
+                      zero,                      zero, zero,   eye,             zero,               zero, zero,  zero_col, zero_col,
+                      zero,                      zero, zero,   zero,            eye,                zero, zero,  zero_col, zero_col,
+                      zero,                      zero, zero,   zero,            zero,               eye,  zero,  zero_col, zero_col,
+                      zero,                      zero, zero,   zero,            zero,               zero, eye,   zero_col, zero_col,
+                      0,0,0,                     0,0,0,0,0,0,  0,0,0,           0,0,0,              0,0,0,0,0,0, 1.0,      0,
+                      0,0,0,                     0,0,0,0,0,0,  0,0,0,           0,0,0,              0,0,0,0,0,0, 0,        1.0;
 
-    //                na    nw    nba   nbw   nclf  ncrf
-    this->cache.Gc << zero, eye,  zero, zero, zero, zero,
-                      zero, zero, zero, zero, zero, zero,
-                      R,    zero, zero, zero, zero, zero,
-                      zero, zero, eye,  zero, zero, zero,
-                      zero, zero, zero, eye,  zero, zero,
-                      zero, zero, zero, zero, R,   zero,
-                      zero, zero, zero, zero, zero, R;
+    //                na    nw    nba   nbw   nclf  ncrf  nylf      nyrf
+    this->cache.Gc << zero, eye,  zero, zero, zero, zero, zero_col, zero_col,
+                      zero, zero, zero, zero, zero, zero, zero_col, zero_col,
+                      R,    zero, zero, zero, zero, zero, zero_col, zero_col,
+                      zero, zero, eye,  zero, zero, zero, zero_col, zero_col,
+                      zero, zero, zero, eye,  zero, zero, zero_col, zero_col,
+                      zero, zero, zero, zero, R,   zero,  zero_col, zero_col,
+                      zero, zero, zero, zero, zero, R,    zero_col, zero_col,
+                      0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  1,        0,
+                      0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,        1;
 
     // Update
-    packState(this->memory.X, R_pred, p_pred, v_pred, ba, bg, pLF_pred, pRF_pred);
+    packState(this->memory.X, R_pred, p_pred, v_pred, ba, bg, pLF_pred, pRF_pred, footYaws_pred);
     this->memory.Qc = this->cache.Fk * this->cache.Gc * Qcont * this->cache.Gc.transpose() * this->cache.Fk.transpose() * dt;
     this->memory.P = this->cache.Fk * this->memory.P * this->cache.Fk.transpose() + this->memory.Qc;
 }
@@ -422,22 +443,45 @@ void contact_ekf::update_forward_kinematics(VectorXd &w, VectorXd &encoders, Vec
     Matrix3d RLF_enc, RRF_enc;
     Vector3d pRF_enc, pLF_enc;
     MatrixXd JRF_enc(3,14), JLF_enc(3,14);
+    MatrixXd JrotLF_enc(3,14), JrotRF_enc(3,14);
     relative_foot_positions(encoders, pLF_enc, pRF_enc, RLF_enc, RRF_enc);
-    relative_foot_jacobians(encoders, JLF_enc, JRF_enc);
+    relative_foot_jacobians(encoders, JLF_enc, JRF_enc, JrotLF_enc, JrotRF_enc);
 
     // Predicted state
+    MatrixXd zero_col = MatrixXd::Zero(3,1);
     Matrix3d zero = Matrix3d::Zero();
     Matrix3d R;
+    Vector2d footYaws;
     Vector3d p, v, wa, wg, ba, bw, plf, prf;
-    unpackState(this->memory.X, R, p, v, ba, bw, plf, prf);
+    unpackState(this->memory.X, R, p, v, ba, bw, plf, prf, footYaws);
     Matrix3d Rt = R.transpose();
     Vector3d wmb =  w - bw;
 
+    // Floating base
     Vector3d pLF_pred = Rt * (plf - p);
     Vector3d pRF_pred = Rt * (prf - p);
     Vector3d vLF = skew(wmb)*pLF_enc + JLF_enc * dencoders;
     Vector3d vRF = skew(wmb)*pRF_enc + JRF_enc * dencoders;
     Vector3d v_pred = -R.transpose() * v;
+
+    // Foot Rotations
+    Matrix3d Rz_LF, Rz_RF;
+    Rz_LF << cos(footYaws(0)), -sin(footYaws(0)), 0,
+             sin(footYaws(0)), cos(footYaws(0)),  0,
+             0,                  0,               1;
+    Rz_RF << cos(footYaws(1)), -sin(footYaws(1)), 0,
+             sin(footYaws(1)), cos(footYaws(1)),  0,
+             0,                  0,               1;
+    Matrix3d RLF_pred, RRF_pred;
+    RLF_pred = Rt * Rz_LF;
+    RRF_pred = Rt * Rz_RF;
+
+    Vector2d footYaws_pred;
+    Eigen::EulerAnglesXYZd euler;
+    eulerXYZ(RLF_pred, euler);
+    footYaws_pred(0) = euler.gamma();
+    eulerXYZ(RRF_pred, euler);
+    footYaws_pred(1) = euler.gamma();
 
     // Encoder noise
     MatrixXd Renc(14,14);
@@ -449,45 +493,43 @@ void contact_ekf::update_forward_kinematics(VectorXd &w, VectorXd &encoders, Vec
     MatrixXd Rdcon(3,3);
     Rdcon.setZero();
     Rdcon.diagonal() << pow(this->config.dcontact_noise_std,2) * VectorXd::Ones(3);
+    double Rzcon = pow(this->config.contact_yaw_noise_std,2);
 
     // Update measurement based on contact condition
     VectorXd y, h;
-    if ( (contact(0) >= 0.99) && (contact(1) >= 0.99) ) {
+    if ( (contact(0) >= 0.25) && (contact(1) >= 0.25) ) {
         // Double support
         y.resize(6);
         y << pLF_enc, pRF_enc;
         h.resize(6);
         h << pLF_pred, pRF_pred;
-        this->cache.Hk.resize(6,21); this->cache.Hk.setZero();
-        this->cache.Rk.resize(6,12); this->cache.Rk.setZero();
-        this->cache.Hk << skew(pLF_pred), -Rt,  zero, zero, zero, Rt, zero,
-                          skew(pRF_pred), -Rt,  zero, zero, zero, zero, Rt;
-        this->cache.Rk.setZero();
+        this->cache.Hk.resize(6,23); this->cache.Hk.setZero();
+        this->cache.Rk.resize(6,6); this->cache.Rk.setZero();
+        this->cache.Hk << skew(pLF_pred), -Rt,  zero, zero, zero, Rt, zero, zero_col, zero_col,
+                          skew(pRF_pred), -Rt,  zero, zero, zero, zero, Rt, zero_col, zero_col;
         this->cache.Rk.block(0,0,3,3) << JLF_enc * Renc * JLF_enc.transpose() + Rcon;
         this->cache.Rk.block(3,3,3,3) << JRF_enc * Renc * JRF_enc.transpose() + Rcon;
 
-    } else if (contact(1) >= 0.99) {
+    } else if (contact(1) >= 0.25) {
         // Right support
         y.resize(3);
         y << pRF_enc;
         h.resize(3);
         h << pRF_pred;
-        this->cache.Hk.resize(3,21); this->cache.Hk.setZero();
+        this->cache.Hk.resize(3,23); this->cache.Hk.setZero();
         this->cache.Rk.resize(3,3); this->cache.Rk.setZero();
-        this->cache.Hk << skew(pRF_pred), -Rt, zero, zero, zero, zero, Rt;
-        this->cache.Rk.setZero();
+        this->cache.Hk << skew(pRF_pred), -Rt, zero, zero, zero, zero, Rt, zero_col, zero_col;
         this->cache.Rk.block(0,0,3,3) << JRF_enc * Renc * JRF_enc.transpose() + Rcon;
 
-    } else if (contact(0) >= 0.99) {
+    } else if (contact(0) >= 0.25) {
         // Left support
         y.resize(3);
         y << pLF_enc;
         h.resize(3);
         h << pLF_pred;
-        this->cache.Hk.resize(3,21); this->cache.Hk.setZero();
+        this->cache.Hk.resize(3,23); this->cache.Hk.setZero();
         this->cache.Rk.resize(3,3); this->cache.Rk.setZero();
-        this->cache.Hk << skew(pLF_pred), -Rt, zero, zero, zero, Rt, zero;
-        this->cache.Rk.setZero();
+        this->cache.Hk << skew(pLF_pred), -Rt, zero, zero, zero, Rt, zero, zero_col, zero_col;
         this->cache.Rk.block(0,0,3,3) << JLF_enc * Renc * JLF_enc.transpose() + Rcon;
     } else {
         // Don't update
@@ -496,14 +538,13 @@ void contact_ekf::update_forward_kinematics(VectorXd &w, VectorXd &encoders, Vec
 
     // Kalman gain step
     // Standard EKF update
-    VectorXd dx(21);
+    VectorXd dx(23);
     MatrixXd Sk(this->cache.Rk.rows(), this->cache.Rk.cols());
     MatrixXd K(this->memory.P.rows(), this->cache.Rk.rows());
-
     Sk = this->cache.Hk * this->memory.P * this->cache.Hk.transpose() + this->cache.Rk;
     K = ( this->memory.P * this->cache.Hk.transpose() ) * Sk.inverse();
     dx = K * ( y - h );
-    this->memory.P = (MatrixXd::Identity(21,21) - K * this->cache.Hk) * this->memory.P * (MatrixXd::Identity(21,21) - K * this->cache.Hk).transpose() + K * this->cache.Rk * K.transpose();
+    this->memory.P = (MatrixXd::Identity(23,23) - K * this->cache.Hk) * this->memory.P * (MatrixXd::Identity(23,23) - K * this->cache.Hk).transpose() + K * this->cache.Rk * K.transpose();
 
     // Update values in X
     Vector3d alpha = dx.block(0,0,3,1);
@@ -514,10 +555,11 @@ void contact_ekf::update_forward_kinematics(VectorXd &w, VectorXd &encoders, Vec
     bw += dx.block(12,0,3,1);
     plf += dx.block(15,0,3,1);
     prf += dx.block(18,0,3,1);
-    packState(this->memory.X, R, p, v, ba, bw, plf, prf);
+    footYaws += dx.block(21,0,2,1);
+    packState(this->memory.X, R, p, v, ba, bw, plf, prf, footYaws);
 }
 
-void contact_ekf::unpackState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bw, Vector3d &plf, Vector3d &prf) {
+void contact_ekf::unpackState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bw, Vector3d &plf, Vector3d &prf, Vector2d &footYaws) {
     R << X.block(0,0,3,3);
     p << X.col(3);
     v << X.col(4);
@@ -525,9 +567,11 @@ void contact_ekf::unpackState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v
     bw << X.col(6);
     plf << X.col(7);
     prf << X.col(8);
+    footYaws(0) = X(0,9);
+    footYaws(1) = X(1,9);
 }
 
-void contact_ekf::packState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bw, Vector3d &plf, Vector3d &prf) {
+void contact_ekf::packState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bw, Vector3d &plf, Vector3d &prf, Vector2d &footYaws) {
     X.block(0,0,3,3) << R;
     X.col(3) << p;
     X.col(4) << v;
@@ -535,6 +579,7 @@ void contact_ekf::packState(MatrixXd &X, Matrix3d &R, Vector3d &p, Vector3d &v, 
     X.col(6) << bw;
     X.col(7) << plf;
     X.col(8) << prf;
+    X.col(9) << footYaws, 0.0;
 }
 
 void contact_ekf::relative_foot_positions(VectorXd &enc, Vector3d &plf, Vector3d &prf, Matrix3d &Rlf, Matrix3d &Rrf) {
@@ -571,19 +616,23 @@ void contact_ekf::relative_foot_positions(VectorXd &enc, Vector3d &plf, Vector3d
     Rrf = Rz * Ry * Rx;
 }
 
-void contact_ekf::relative_foot_jacobians(VectorXd &enc, MatrixXd &Jlf, MatrixXd &Jrf) {
+void contact_ekf::relative_foot_jacobians(VectorXd &enc, MatrixXd &Jlf, MatrixXd &Jrf, MatrixXd &JrotLF_enc, MatrixXd &JrotRF_enc) {
     VectorXd q(22); q.setZero();
     for (int i=0; i<this->robot->iEncoderMap.size(); i++)
         q(this->robot->iEncoderMap(i)) = enc(i);
 
     MatrixXd temp(6,22);
     SymFunction::J_leftFoot(temp, q);
-    for (int i=0; i<this->robot->iEncoderMap.size(); i++)
+    for (int i=0; i<this->robot->iEncoderMap.size(); i++) {
         Jlf.block(0,i,3,1) << temp.block(0,this->robot->iEncoderMap(i),3,1);
+        JrotLF_enc.block(0,i,3,1) << temp.block(3,this->robot->iEncoderMap(i),3,1);
+    }
 
     SymFunction::J_rightFoot(temp, q);
-    for (int i=0; i<this->robot->iEncoderMap.size(); i++)
+    for (int i=0; i<this->robot->iEncoderMap.size(); i++) {
         Jrf.block(0,i,3,1) << temp.block(0,this->robot->iEncoderMap(i),3,1);
+        JrotRF_enc.block(0,i,3,1) << temp.block(3,this->robot->iEncoderMap(i),3,1);
+    }
 }
 
 int contact_ekf::factorial(int n)
