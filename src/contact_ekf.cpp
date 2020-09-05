@@ -76,6 +76,8 @@ void contact_ekf::Memory::reset() {
     this->encoders_prev.setZero();
     this->dencoders_prev.setZero();
     this->contact_prev.setZero();
+
+     this->v_init.setZero();
 }
 
 void contact_ekf::Config::init() {
@@ -181,6 +183,15 @@ void contact_ekf::reset() {
     this->lpVZ.reset(0.);
 }
 
+void contact_ekf::reset(Vector3d &initial_velocity) {
+    this->reset();
+    this->memory.v_init << initial_velocity;
+}
+
+bool contact_ekf::isEnabled() {
+    return this->memory.filter_enabled;
+}
+
 void contact_ekf::getValues(Matrix3d &R, Vector3d &p, Vector3d &v, Vector3d &ba, Vector3d &bg, Vector3d &plf, Vector3d &prf, Vector2d &footYaws) {
     unpackState(this->memory.X, R, p, v, ba, bg, plf, prf, footYaws);
 
@@ -275,7 +286,7 @@ void contact_ekf::initializeFilter(VectorXd &encoders, VectorXd &contact) {
         Vector2d footYaws = Vector2d::Zero();
         Vector3d pLF, pRF, p_init, v_init;
         p_init.setZero();
-        v_init.setZero();
+        v_init << this->memory.v_init;
         relative_foot_positions(encoders, pLF, pRF, Rlf, Rrf);
         pLF = R * pLF;
         pRF = R * pRF;
