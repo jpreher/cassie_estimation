@@ -227,7 +227,7 @@ void contact_ekf::update(double dt, VectorXd &w, VectorXd &a, VectorXd &encoders
         // Predict state using IMU and contact measurements
         this->predict_state(dt);
 
-        if ( (contact(0) >= 0.25) || (contact(1) >= 0.25) ) {
+        if ( (contact(0) >= 0.1) || (contact(1) >= 0.1) ) {
             // Update state using forward kinematic measurements
             this->update_forward_kinematics(w, encoders, dencoders, contact);
             this->memory.t_last = ros::Time::now().toSec();
