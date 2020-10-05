@@ -4,6 +4,8 @@
 // Main ekf
 #include <cassie_description/cassie_model.hpp>
 #include <cassie_estimation/contact_ekf.hpp>
+#include <cassie_estimation/contact_classifier.hpp>
+
 
 // Logging
 #include <string>
@@ -19,7 +21,7 @@ int main(int argc, char *argv[])
     ros::NodeHandle nh("/cassie/interface");
 
     // Output file for plotting
-    VectorXd log = VectorXd::Zero(31);
+    VectorXd log = VectorXd::Zero(39);
     std::fstream logfile;
     std::string home=getenv("HOME");
     std::string path= home+"/datalog/ekf/ekf_test.bin";
@@ -78,23 +80,33 @@ int main(int argc, char *argv[])
     // Build estimator
     cassie_model::Cassie robot;
     contact_ekf ekf(nh, robot, true);
+    ContactClassifier contact_classifier(nh, robot, 0.0005);
 
     // Run and log
-
-    //for (unsigned long long i=0; i<nlogse; i++) {
-    for (unsigned long long i=0; i<nlogse; i++) {//i<nlogse; i++) {
+    for (unsigned long long i=0; i<nlogse; i++) {
         // Get values at timestep
-        VectorXd w, a, encoder, dencoder, con, quatern;
+        VectorXd w, a, encoder, dencoder, con, quatern, achilles;
         w        = gyro.col(i);
         a        = accel.col(i);
         encoder  = enc.col(i);
         dencoder = denc.col(i);
         con      = contact.col(i);
         quatern  = quat.col(i);
+        achilles = ach.col(i);
 
         double dt = 0;
         if (i>0)
             dt = te(i) - te(i-1);
+
+        // Update the robot model
+        robot.q.setZero();
+        robot.dq.setZero();
+        for (int i=0; i<robot.iEncoderMap.size(); i++) {
+            robot.q(robot.iEncoderMap(i)) = encoder(i);
+            robot.dq(robot.iEncoderMap(i)) = dencoder(i);
+        }
+        robot.q(LeftHeelSpring) = achilles(0);
+        robot.q(RightHeelSpring) = achilles(1);
 
         // Do euler angles - SUBTRACTING OUT THE YAW!!!
         Eigen::Quaterniond quat(quatern(0), quatern(1), quatern(2), quatern(3));
@@ -112,6 +124,18 @@ int main(int argc, char *argv[])
         robot.q(BaseRotY) = euler.beta();  // pitch
         robot.q(BaseRotZ) = euler.gamma(); // yaw
 
+        // Do contact estimation
+        contact_classifier.update();
+        if (isnan((robot.leftContact))) {
+            robot.leftContact = 0.;
+            ROS_WARN("Left contact nan!");
+        }
+        if (isnan((robot.rightContact))) {
+            robot.rightContact = 0.;
+            ROS_WARN("Right contact nan!");
+        }
+        con << robot.leftContact, robot.rightContact; // override stored measurement
+
         // Update
         dt = 0.0005;
         ekf.update(dt, w, a, encoder, dencoder, con);
@@ -121,6 +145,44 @@ int main(int argc, char *argv[])
         Vector2d footYaws;
         Vector3d pos, vel, ba, bg, plf, prf;
         ekf.getValues(R,pos,vel,ba,bg,plf,prf,footYaws);
+
+        // Rotate yaw
+        eulerXYZ(R, euler);
+        Rz << cos(euler.gamma()), -sin(euler.gamma()), 0,
+              sin(euler.gamma()), cos(euler.gamma()), 0,
+              0, 0, 1.0;
+        vel = Rz.transpose() * vel;
+
+        // Rotate into foot frames
+        VectorXd q(22); q.setZero();
+        for (int i=0; i<robot.iEncoderMap.size(); i++)
+            q(robot.iEncoderMap(i)) = encoder(i);
+        Matrix3d Rzl, Rzr;
+        MatrixXd temp(6,1);
+        SymFunction::pose_leftFoot(temp,q);
+        Rzl << cos(temp(5)), -sin(temp(5)), 0,
+               sin(temp(5)), cos(temp(5)), 0,
+               0, 0, 1.0;
+
+        SymFunction::pose_rightFoot(temp,q);
+        Rzr << cos(temp(5)), -sin(temp(5)), 0,
+               sin(temp(5)), cos(temp(5)), 0,
+               0, 0, 1.0;
+
+        // Rotate into frame relative to stance foot
+        if ( (con(0) >= 0.25) && (con(1) >= 0.25) ) {
+            // Double support
+            VectorXd vl(3), vr(3);
+            vl = Rzl * vel;
+            vr = Rzr * vel;
+            vel = (vl + vr) / 2.0;
+        } else if (con(1) >= 0.25) {
+            // Right support
+            vel = Rzr * vel;
+        } else if (con(0) >= 0.25) {
+            // Left support
+            vel = Rzl * vel;
+        }
 
         log << te(i),    // 1
                R(0,0), R(0,1), R(0,2), // 3
@@ -132,7 +194,9 @@ int main(int argc, char *argv[])
                ba,       // 3
                bg,       // 3
                plf,      // 3
-               prf;      // 3
+               prf,      // 3
+               con,      // 2
+               contact_classifier.grf;
         logfile.write(reinterpret_cast<char *>(log.data()), (log.size())*sizeof(double));
     }
 
