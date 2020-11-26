@@ -142,7 +142,7 @@ void HeelspringSolver::J_IKfunction(Eigen::VectorXd &x, Eigen::MatrixXd &J) {
 
 int HeelspringSolver::InverseKinematics(Eigen::VectorXd &x) {
     int iteration_limit = 10;
-    double xtol = 1e-12;
+    double xtol = 1e-16;
 
     this->cache.q << this->robot->q;
     for (int i=0; i<6; ++i)
@@ -170,6 +170,6 @@ int HeelspringSolver::InverseKinematics(Eigen::VectorXd &x) {
         // Perform the update
         x = x - (J.transpose() * (J * J.transpose()).inverse()) * F;
     }
-    ROS_WARN("IK DID NOT CONVERGE");
+    ROS_WARN("HEELSPRING IK DID NOT CONVERGE");
     return -1;
 }

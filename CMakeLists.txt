@@ -41,6 +41,7 @@ endif()
 add_library(${PROJECT_NAME}
     src/contact_classifier.cpp
     src/heelspring_solver.cpp
+    src/rigidtarsus_solver.cpp
     src/kinematics_hip_velocity_estimator.cpp
     src/contact_ekf.cpp
 )
