@@ -17,6 +17,7 @@ public:
     RigidTarsusSolver(cassie_model::Cassie &robot);
     void update();
     void reconfigure();
+    void reset();
     double getLeftRigidTarsusPosition() {return this->memory.tar_sol[0];}
     double getLeftRigidTarsusVelocity() {return this->memory.dtar_sol[0];}
     double getRightRigidTarsusPosition() {return this->memory.tar_sol[1];}

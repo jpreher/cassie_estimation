@@ -38,6 +38,11 @@ RigidTarsusSolver::RigidTarsusSolver(cassie_model::Cassie &robot) {
     this->memory.init();
 }
 
+void RigidTarsusSolver::reset() {
+    this->cache.reset();
+    this->memory.reset();
+}
+
 void RigidTarsusSolver::update() {
     // Run the inverse kinematics
     VectorXd x(2);
